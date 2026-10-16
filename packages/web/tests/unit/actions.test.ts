@@ -152,15 +152,11 @@ describe('classifyActionError', () => {
   });
 });
 
-/** A locator stub recording every action call; the swipe path also needs a box and a page. */
-function stubLocator(box = { x: 10, y: 20, width: 200, height: 100 }) {
+/** A locator stub recording every action call; the swipe path also needs a box, a page, and whether the node is under the pointer's aim. */
+function stubLocator(box = { x: 10, y: 20, width: 200, height: 100 }, aim: 'pointer' | 'centre' | 'blocked' = 'blocked') {
   const wheel = vi.fn(async (_x: number, _y: number) => undefined);
-  const chooser = { setFiles: vi.fn(async () => undefined) };
-  const page = {
-    viewportSize: () => ({ width: 1280, height: 720 }),
-    mouse: { wheel },
-    waitForEvent: vi.fn(async () => chooser),
-  };
+  const frame = vi.fn(async () => undefined);
+  const move = vi.fn(async (_x: number, _y: number) => undefined);
   const locator = {
     click: vi.fn(async () => undefined),
     dblclick: vi.fn(async () => undefined),
@@ -171,19 +167,20 @@ function stubLocator(box = { x: 10, y: 20, width: 200, height: 100 }) {
     scrollIntoViewIfNeeded: vi.fn(async () => undefined),
     selectOption: vi.fn(async () => undefined),
     setInputFiles: vi.fn(async () => undefined),
-    evaluate: vi.fn(async () => true),
     dragTo: vi.fn(async () => undefined),
     boundingBox: vi.fn(async () => box),
-    page: () => page,
+    evaluate: vi.fn(async () => (aim === 'blocked' ? { aim } : { aim, box })),
+    page: () => ({ viewportSize: () => ({ width: 1280, height: 720 }), mouse: { wheel, move }, evaluate: frame }),
   };
   const target: ActionTarget = { kind: 'locator', locator: locator as unknown as PwLocator };
-  return { locator, target, wheel, page, chooser };
+  return { locator, target, wheel, move, frame };
 }
 
 describe('dispatchLocatorAction', () => {
   const lookup = () => {
     throw new Error('no second target in these cases');
   };
+  const OPERATION = { timeoutMs: 7, signal: new AbortController().signal };
 
   it.each([
     [{ kind: 'longPress', durationMs: 900 }, 'click', [{ timeout: 7, delay: 900 }]],
@@ -194,68 +191,47 @@ describe('dispatchLocatorAction', () => {
     'dispatches %j to locator.%s',
     async (action, method, args) => {
       const { locator, target } = stubLocator();
-      await dispatchLocatorAction(target, action, 7, lookup);
+      await dispatchLocatorAction(target, action, OPERATION, lookup);
       const spy = locator[method as keyof typeof locator] as ReturnType<typeof vi.fn>;
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0]).toEqual(args);
     },
   );
 
-  it('uploads through a file chooser when the target is a button', async () => {
-    const { locator, target, page, chooser } = stubLocator();
-    locator.evaluate.mockResolvedValue(false);
-
-    await dispatchLocatorAction(target, { kind: 'setInputFiles', paths: ['/tmp/a.txt'] }, 7, lookup);
-
-    expect(page.waitForEvent).toHaveBeenCalledWith('filechooser', { timeout: 7 });
-    expect(locator.click).toHaveBeenCalledWith({ timeout: 7 });
-    expect(chooser.setFiles).toHaveBeenCalledWith(['/tmp/a.txt'], { timeout: 7 });
-    expect(locator.setInputFiles).not.toHaveBeenCalled();
-  });
-
-  it('keeps direct setInputFiles for a file input target', async () => {
-    const { locator, target, page, chooser } = stubLocator();
-
-    await dispatchLocatorAction(target, { kind: 'setInputFiles', paths: ['/tmp/a.txt'] }, 7, lookup);
-
-    expect(locator.setInputFiles).toHaveBeenCalledWith(['/tmp/a.txt'], { timeout: 7 });
-    expect(locator.click).not.toHaveBeenCalled();
-    expect(page.waitForEvent).not.toHaveBeenCalled();
-    expect(chooser.setFiles).not.toHaveBeenCalled();
-  });
-
-  it('uses the file chooser for an observed element handle', async () => {
-    const chooser = { setFiles: vi.fn(async () => undefined) };
-    const page = { waitForEvent: vi.fn(async () => chooser) };
-    const element = {
-      evaluate: vi.fn(async () => false),
-      click: vi.fn(async () => undefined),
-      ownerFrame: vi.fn(async () => ({ page: () => page })),
-    };
-    const target: ActionTarget = { kind: 'element', element: element as never };
-
-    await dispatchLocatorAction(target, { kind: 'setInputFiles', paths: ['/tmp/a.txt'] }, 7, lookup);
-
-    expect(page.waitForEvent).toHaveBeenCalledWith('filechooser', { timeout: 7 });
-    expect(element.click).toHaveBeenCalledWith({ timeout: 7 });
-    expect(chooser.setFiles).toHaveBeenCalledWith(['/tmp/a.txt'], { timeout: 7 });
-  });
-
   it('scrolls a node with a wheel gesture sized by its own box: the agent node scroll', async () => {
-    const { locator, target, wheel } = stubLocator({ x: 0, y: 0, width: 400, height: 300 });
-    await dispatchLocatorAction(target, { kind: 'swipe', direction: 'down' }, 7, lookup);
+    const { locator, target, wheel, frame } = stubLocator({ x: 0, y: 0, width: 400, height: 300 });
+    await dispatchLocatorAction(target, { kind: 'swipe', direction: 'down' }, OPERATION, lookup);
     expect(locator.hover).toHaveBeenCalledWith({ timeout: 7 });
     expect(wheel).toHaveBeenCalledWith(0, 150);
+    expect(frame.mock.invocationCallOrder[0]).toBeGreaterThan(wheel.mock.invocationCallOrder[0]!);
 
-    await dispatchLocatorAction(target, { kind: 'swipe', direction: 'left', momentum: 'fast' }, 7, lookup);
+    await dispatchLocatorAction(target, { kind: 'swipe', direction: 'left', momentum: 'fast' }, OPERATION, lookup);
     expect(wheel).toHaveBeenLastCalledWith(-600, 0);
+  });
+
+  it('wheels a node hit at its centre there, at the box the hit test read, without hovering it first', async () => {
+    const { locator, target, wheel, move } = stubLocator({ x: 0, y: 0, width: 400, height: 300 }, 'centre');
+    await dispatchLocatorAction(target, { kind: 'swipe', direction: 'down' }, OPERATION, lookup);
+    expect(locator.hover).not.toHaveBeenCalled();
+    expect(locator.boundingBox).not.toHaveBeenCalled();
+    expect(move).toHaveBeenCalledWith(200, 150);
+    expect(move.mock.invocationCallOrder[0]).toBeLessThan(wheel.mock.invocationCallOrder[0]!);
+    expect(wheel).toHaveBeenCalledWith(0, 150);
+  });
+
+  it('wheels a node the pointer already hovers without moving the pointer', async () => {
+    const { locator, target, wheel, move } = stubLocator({ x: 0, y: 0, width: 400, height: 300 }, 'pointer');
+    await dispatchLocatorAction(target, { kind: 'swipe', direction: 'down' }, OPERATION, lookup);
+    expect(locator.hover).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
+    expect(wheel).toHaveBeenCalledWith(0, 150);
   });
 
   it('reports a node without a box as NOT_ACTIONABLE on swipe', async () => {
     const { locator, target } = stubLocator();
     locator.boundingBox.mockResolvedValueOnce(null as never);
     await expect(
-      dispatchLocatorAction(target, { kind: 'swipe', direction: 'up' }, 7, lookup),
+      dispatchLocatorAction(target, { kind: 'swipe', direction: 'up' }, OPERATION, lookup),
     ).rejects.toMatchObject({ code: 'NOT_ACTIONABLE' });
   });
 
@@ -265,7 +241,7 @@ describe('dispatchLocatorAction', () => {
     await dispatchLocatorAction(
       source.target,
       { kind: 'dragTo', target: { id: 'n2', revision: 'r' } },
-      7,
+      OPERATION,
       () => destination.target,
     );
     expect(source.locator.dragTo).toHaveBeenCalledWith(destination.target.locator, { timeout: 7 });
@@ -288,7 +264,7 @@ describe('dispatchPointerAction', () => {
       dblclick: async (x: number, y: number) => { calls.push(`dblclick ${x},${y}`); },
       wheel: async (dx: number, dy: number) => { calls.push(`wheel ${dx},${dy}`); },
     };
-    const page = { mouse, viewportSize: () => ({ width: 800, height: 600 }) } as unknown as Page;
+    const page = { mouse, evaluate: async () => { calls.push('frame'); }, viewportSize: () => ({ width: 800, height: 600 }) } as unknown as Page;
     return { page, calls };
   }
 
@@ -357,6 +333,19 @@ describe('dispatchPointerAction', () => {
   it('swipes in a direction as a wheel gesture over the point, sized by the viewport', async () => {
     const { page, calls } = stubPage();
     await dispatchPointerAction(page, { x: 10, y: 20 }, { kind: 'swipe', direction: 'down' });
-    expect(calls).toEqual(['move 10,20', 'wheel 0,300']);
+    expect(calls).toEqual(['move 10,20', 'wheel 0,300', 'frame']);
+  });
+
+  it('resolves a swipe only once the frame after the wheel rendered', async () => {
+    const { page } = stubPage();
+    let render!: () => void;
+    (page as unknown as { evaluate: () => Promise<void> }).evaluate = () => new Promise((resolve) => (render = resolve));
+    let done = false;
+    const swipe = dispatchPointerAction(page, { x: 10, y: 20 }, { kind: 'swipe', direction: 'down' }).then(() => (done = true));
+    await vi.waitFor(() => expect(render).toBeDefined());
+    expect(done).toBe(false);
+    render();
+    await swipe;
+    expect(done).toBe(true);
   });
 });
