@@ -377,7 +377,8 @@ export interface Locator extends Screen {
   `INVALID_ARGUMENT` at runtime: a secret is filled, never typed as
   keystrokes. The step records the locator, not the text, like `fill`.
 - `setInputFiles` paths resolve from the project root. An empty list or blank
-  entry throws `INVALID_ARGUMENT`.
+  entry throws `INVALID_ARGUMENT`. On the web it also takes a button that
+  opens a file chooser; one that opens none fails with `ACTION_FAILED`.
 - `dragTo` with a non-runner target, or one made by another target's screen,
   throws `INVALID_LOCATOR`.
 - `swipe` on a locator is a gesture on that one node: `{ direction,
