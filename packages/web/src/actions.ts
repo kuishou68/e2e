@@ -102,7 +102,8 @@ function isRadio(element: ElementHandle<Element>): Promise<boolean> {
  * or a node inside a `<label>` for one, takes the files directly, as
  * Playwright retargets a label to its control. Anything else is clicked
  * with the chooser already awaited, and fails if no chooser opens. Every
- * step shares the operation's deadline.
+ * step shares the operation's deadline, and a cancelled operation sets no
+ * files, even when its chooser opens after the cancel.
  */
 async function uploadFiles(target: ActionTarget, paths: readonly string[], operation: ConnectionBudget): Promise<void> {
   const deadline = new Deadline(operation.timeoutMs);
@@ -111,10 +112,12 @@ async function uploadFiles(target: ActionTarget, paths: readonly string[], opera
     target.kind === 'element' ? target.element : await target.locator.elementHandle({ timeout: operation.timeoutMs });
   try {
     if (await isFileInput(element)) {
+      operation.signal.throwIfAborted();
       await element.setInputFiles([...paths], { timeout: remaining() });
       return;
     }
     const page = await targetPage(target);
+    operation.signal.throwIfAborted();
     const opened = page.waitForEvent('filechooser', { timeout: remaining() });
     opened.catch(() => undefined);
     await element.click({ timeout: remaining() });
@@ -125,6 +128,7 @@ async function uploadFiles(target: ActionTarget, paths: readonly string[], opera
         cause,
       });
     });
+    operation.signal.throwIfAborted();
     await chooser.setFiles([...paths], { timeout: remaining() });
   } finally {
     if (target.kind === 'locator') void element.dispose().catch(() => undefined);

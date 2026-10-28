@@ -814,7 +814,7 @@ await screen.getByRole('button', 'Account').hover();
 #### `setInputFiles`
 
 ```ts
-/** Sets the files of exactly one file input; paths resolve from the project root. */
+/** Sets the files of exactly one file input, or of a control that opens a file chooser; paths resolve from the project root. */
 setInputFiles(paths: string | readonly string[], options?: ActionOptions): Promise<void>;
 ```
 

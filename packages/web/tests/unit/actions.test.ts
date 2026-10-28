@@ -229,7 +229,7 @@ describe('dispatchLocatorAction', () => {
     expect(element.dispose).toHaveBeenCalled();
   });
 
-  it('sets a file input or its label directly', async () => {
+  it('sets a file input directly', async () => {
     const { element, target, page } = stubUpload(true);
     await dispatchLocatorAction(target, { kind: 'setInputFiles', paths: ['/tmp/a.txt'] }, OPERATION, lookup);
     expect(element.setInputFiles).toHaveBeenCalledWith(['/tmp/a.txt'], { timeout: expect.any(Number) });
@@ -243,6 +243,24 @@ describe('dispatchLocatorAction', () => {
     await expect(
       dispatchLocatorAction(target, { kind: 'setInputFiles', paths: ['/tmp/a.txt'] }, OPERATION, lookup),
     ).rejects.toMatchObject({ code: 'NOT_ACTIONABLE', message: expect.stringContaining('opened no file chooser') });
+  });
+
+  it('sets no files when the operation is cancelled while the chooser is pending', async () => {
+    const { target, page, chooser } = stubUpload(false);
+    const cancel = new AbortController();
+    let openChooser: (value: unknown) => void = () => undefined;
+    page.waitForEvent.mockReturnValue(new Promise((resolve) => (openChooser = resolve)));
+    const upload = dispatchLocatorAction(
+      target,
+      { kind: 'setInputFiles', paths: ['/tmp/a.txt'] },
+      { timeoutMs: 1000, signal: cancel.signal },
+      lookup,
+    );
+    await vi.waitFor(() => expect(page.waitForEvent).toHaveBeenCalled());
+    cancel.abort(new Error('step cancelled'));
+    openChooser(chooser);
+    await expect(upload).rejects.toThrow('step cancelled');
+    expect(chooser.setFiles).not.toHaveBeenCalled();
   });
 
   it('reports a failed click without leaving the chooser wait unhandled', async () => {
